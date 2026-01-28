@@ -1,0 +1,78 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment files (contain secrets)
+.env
+config.env
+*.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Label Studio data (large files and local data)
+label-studio/data/
+label-studio/media/
+label-studio/export/
+label-studio/backups/
+
+# Audio files (can be large)
+*.wav
+*.mp3
+*.m4a
+*.ogg
+*.flac
+*.webm
+*.opus
+
+# Audio import directories (contain large files)
+audio-import/pending/
+audio-import/processed/
+audio-import/failed/
+audio-import/venv/
+
+# Middleware backups and local data
+middleware/backup/*.txt
+!middleware/backup/requirements_full_backup.txt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Redis dumps
+dump.rdb
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# System service logs (these are in journald)
+*.service.log

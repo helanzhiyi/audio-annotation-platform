@@ -1,0 +1,46 @@
+[Unit]
+Description=Label Studio ASR Middleware Service
+Documentation=file:///opt/ls-middleware/CLAUDE.md
+After=network.target redis.service
+Wants=redis.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+WorkingDirectory=/opt/ls-middleware
+Environment=PATH=/opt/ls-middleware/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=/opt/ls-middleware
+Environment=PYTHONUNBUFFERED=1
+
+# Activate virtual environment and run application
+ExecStart=/opt/ls-middleware/venv/bin/python app.py
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Restart policy
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=false
+ProtectSystem=strict
+ReadWritePaths=/opt/ls-middleware /opt/label-studio/media
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ls-middleware
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

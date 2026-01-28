@@ -1,0 +1,68 @@
+# Label Studio with PostgreSQL Backend
+# Before starting, run ./setup.sh to configure environment variables
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: ls-postgres
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-labelstudio}
+      - POSTGRES_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD not set - run ./setup.sh}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backups:/backups
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    networks:
+      - label-studio-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-labelstudio}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  label-studio:
+    image: heartexlabs/label-studio:latest
+    container_name: label-studio
+    ports:
+      - "8080:8080"
+    environment:
+      - DJANGO_DB=default
+      - POSTGRE_NAME=${POSTGRES_DB:-labelstudio}
+      - POSTGRE_USER=${POSTGRES_USER:-labelstudio}
+      - POSTGRE_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD not set - run ./setup.sh}
+      - POSTGRE_PORT=5432
+      - POSTGRE_HOST=postgres
+      - LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+      - LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/label-studio/data/media
+      # CRITICAL: This must be set to your public IP or domain for CSS/JS to load
+      # Example: http://3.123.45.67:8080 or http://your-domain.com:8080
+      - LABEL_STUDIO_HOST=${LABEL_STUDIO_HOST:?LABEL_STUDIO_HOST not set - run ./setup.sh}
+      - LOCAL_FILES_SERVING_ENABLED=true
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY not set - run ./setup.sh}
+      - LABEL_STUDIO_USER_LOGIN_ENABLED=true
+    volumes:
+      - ./data:/label-studio/data:rw
+      - ./media:/label-studio/data/media:rw
+      - ./export:/label-studio/data/export:rw
+    user: "1001:1001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - label-studio-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres-data:
+
+networks:
+  label-studio-net:
+    external: true

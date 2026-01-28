@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Transcription System</title>
+    <style>
+        :root {
+            --primary: #F0E68C;
+            --primary-hover: #FFA500;
+            --primary-light: rgba(240, 230, 140, 0.15);
+            --primary-lighter: rgba(240, 230, 140, 0.08);
+            --secondary: #000000;
+            --secondary-light: #333333;
+            --success: #4CAF50;
+            --error: #F44336;
+            --warning: #FF9800;
+            --bg-primary: #FFFFFF;
+            --bg-secondary: #F8F8F8;
+            --bg-tertiary: #000000;
+            --text-primary: #000000;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+            --text-white: #FFFFFF;
+            --border: #000000;
+            --border-light: #CCCCCC;
+            --shadow: 0 2px 4px rgba(0,0,0,0.1);
+            --radius: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-tertiary);
+            border-bottom: 3px solid var(--primary);
+            padding: 16px 24px;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+        }
+
+        .header-counters {
+            display: none;
+            font-size: 12px;
+            color: var(--primary);
+            font-weight: 600;
+            gap: 16px;
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -0.02em;
+            text-transform: uppercase;
+        }
+
+        .task-info {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .task-id {
+            padding: 6px 16px;
+            background: var(--primary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--secondary);
+            border: 2px solid var(--secondary);
+        }
+
+        /* Main Container */
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        /* Status Bar */
+        .status-bar {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-light);
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .status-message {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .status-error {
+            color: var(--error);
+        }
+
+        .status-success {
+            color: var(--success);
+        }
+
+        .status-info {
+            color: var(--text-primary);
+        }
+
+        .file-info {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        /* Audio Player Section */
+        .audio-section {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-light);
+            padding: 16px;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+        }
+
+        .waveform-container {
+            background: var(--bg-primary);
+            border-radius: var(--radius);
+            padding: 12px;
+            margin-bottom: 12px;
+            height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .waveform-playhead {
+            position: absolute;
+            top: 12px;
+            bottom: 12px;
+            width: 2px;
+            background: var(--error);
+            z-index: 10;
+            pointer-events: none;
+            transition: left 0.1s linear;
+        }
+
+        .waveform-playhead::before {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            width: 10px;
+            height: 10px;
+            background: var(--error);
+            border-radius: 50%;
+        }
+
+        .waveform-placeholder {
+            color: var(--text-muted);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        /* Audio Controls */
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 8px 0;
+        }
+
+        .control-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius);
+            border: 2px solid var(--secondary);
+            background: var(--primary);
+            color: var(--secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 700;
+        }
+
+        .control-btn:hover {
+            background: var(--primary-hover);
+            transform: scale(1.05);
+        }
+
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .control-btn.play-btn {
+            width: 42px;
+            height: 42px;
+        }
+
+        .playback-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .secondary-btn {
+            background: var(--bg-primary);
+            border: 2px solid var(--secondary);
+            color: var(--secondary);
+        }
+
+        .secondary-btn:hover {
+            background: var(--secondary);
+            color: var(--primary);
+        }
+
+        .time-display {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-family: monospace;
+            font-weight: 600;
+        }
+
+        .progress-container {
+            flex: 1;
+            margin: 0 16px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: var(--bg-primary);
+            border-radius: var(--radius);
+            border: 2px solid var(--secondary);
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.1s;
+        }
+
+        /* Transcription Section */
+        .transcription-section {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-light);
+            padding: 16px;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .transcription-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .transcription-title {
+            font-size: 15px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .char-count {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .transcription-area {
+            width: 100%;
+            height: 120px;
+            min-height: 120px;
+            max-height: 160px;
+            padding: 12px;
+            border: 2px solid var(--secondary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            line-height: 1.5;
+            resize: vertical;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            transition: all 0.2s;
+            background: var(--bg-primary);
+            flex: 1;
+        }
+
+        .transcription-area:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        /* Action Buttons */
+        .action-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 2px solid var(--border-light);
+            flex-shrink: 0;
+        }
+
+        .action-left {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-right {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: 2px solid var(--secondary);
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            text-transform: uppercase;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: var(--secondary);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: var(--bg-primary);
+            color: var(--secondary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--secondary);
+            color: var(--primary);
+        }
+
+        .btn-skip {
+            background: transparent;
+            color: var(--text-secondary);
+            border-color: var(--text-secondary);
+        }
+
+        .btn-skip:hover {
+            color: var(--error);
+            border-color: var(--error);
+            background: rgba(244, 67, 54, 0.1);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Statistics Section - Compact */
+        .stats-section {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-light);
+            padding: 16px 12px;
+            text-align: center;
+            transition: transform 0.2s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            border-color: var(--primary);
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -0.02em;
+            line-height: 1;
+            text-shadow: 1px 1px 0px var(--secondary);
+        }
+
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        /* Start Button Section */
+        .start-section {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        /* Loading state */
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid var(--border-light);
+            border-top-color: var(--primary);
+            border-radius: var(--radius);
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Hidden audio element */
+        audio {
+            display: none;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+
+            .header-content {
+                flex-direction: column;
+                gap: 12px;
+                align-items: flex-start;
+            }
+
+            .action-bar {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .action-left, .action-right {
+                width: 100%;
+            }
+
+            .btn {
+                flex: 1;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="header-left">
+                <div class="logo">Transcription System</div>
+                <div class="task-info">
+                    <div class="task-id" id="taskId">No Task</div>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="header-counters" id="headerCounters">
+                    <div>Today: <span id="headerCompletedToday">0</span></div>
+                    <div>Total: <span id="headerTotalCompleted">0</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-message" id="statusMessage">
+                <span>Ready to start transcription</span>
+            </div>
+            <div class="file-info" id="fileInfo"></div>
+        </div>
+
+        <!-- Statistics Section -->
+        <div class="stats-section" id="statsSection">
+            <div class="stat-card">
+                <div class="stat-value" id="availableTasks">-</div>
+                <div class="stat-label">Available Tasks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalUnlabeled">-</div>
+                <div class="stat-label">Total Unlabeled</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="completedToday">-</div>
+                <div class="stat-label">Completed Today</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalCompleted">-</div>
+                <div class="stat-label">Total Completed</div>
+            </div>
+        </div>
+
+        <!-- Start Button -->
+        <div class="start-section">
+            <button class="btn btn-primary" id="startButton" onclick="app.startLabelling()">
+                Start Labelling
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Audio Player Section -->
+        <div class="audio-section">
+            <div class="waveform-container" id="waveformContainer">
+                <div class="waveform-placeholder">Audio waveform will appear here when loaded</div>
+            </div>
+
+            <div class="audio-controls">
+                <button class="control-btn play-btn" id="playBtn" onclick="app.togglePlayback()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z" id="playIcon"/>
+                        <path d="M6 6h4v12H6V6zm8 0h4v12h-4V6z" id="pauseIcon" style="display:none"/>
+                    </svg>
+                </button>
+
+                <div class="playback-controls">
+                    <button class="control-btn secondary-btn" onclick="app.seekBack()" title="Seek back 5 seconds">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
+                        </svg>
+                    </button>
+                    <button class="control-btn secondary-btn" onclick="app.seekForward()" title="Seek forward 5 seconds">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
+                        </svg>
+                    </button>
+                    <button class="control-btn secondary-btn" id="speedBtn" onclick="app.toggleSpeed()" title="Toggle speed (Normal/Slow)">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M13,2.05V5.08C16.39,5.57 19,8.47 19,12C19,12.9 18.82,13.75 18.5,14.54L21.12,16.07C21.68,14.83 22,13.45 22,12C22,6.82 18.05,2.55 13,2.05M12,19A7,7 0 0,1 5,12C5,8.47 7.61,5.57 11,5.08V2.05C5.94,2.55 2,6.81 2,12A10,10 0 0,0 12,22C15.3,22 18.23,20.39 20.38,17.91L17.91,15.44C16.5,17.39 14.42,18.85 12,19Z"/>
+                        </svg>
+                    </button>
+                    <button class="control-btn secondary-btn" id="repeatBtn" onclick="app.toggleRepeat()" title="Repeat">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar" id="progressBar" onclick="app.seekTo(event)">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                </div>
+
+                <div class="time-display">
+                    <span id="currentTime">00:00:00:000</span>
+                    <span>/</span>
+                    <span id="duration">00:00:00:000</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transcription Section -->
+        <div class="transcription-section">
+            <div class="transcription-header">
+                <div class="transcription-title">Transcription</div>
+                <div class="char-count" id="charCount">0 characters</div>
+            </div>
+
+            <textarea
+                class="transcription-area"
+                id="transcriptionText"
+                placeholder="Type the transcription here..."
+                oninput="app.updateCharCount()"
+            ></textarea>
+
+            <div class="action-bar">
+                <div class="action-left">
+                    <button class="btn btn-secondary" onclick="app.clearTranscription()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+                        </svg>
+                        Clear
+                    </button>
+                    <button class="btn btn-secondary" onclick="app.undoLastEdit()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
+                        </svg>
+                        Undo
+                    </button>
+                </div>
+
+                <div class="action-right">
+                    <button class="btn btn-skip" onclick="app.skipTask()">Skip</button>
+                    <button class="btn btn-primary" onclick="app.submitTranscription()">
+                        Submit
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audioElement" preload="metadata"></audio>
+
+    <script>
+        class TranscriptionApp {
+            constructor() {
+                // Configuration - easily changeable base URL
+                this.config = {
+                    baseUrl: 'https://demo-openchs.bitz-itc.com',
+                    serverUrl: 'https://demo-openchs.bitz-itc.com:8010',
+                    apiKey: '8fde55c557ec7ada7b83b15c2618427bc03f58358a'
+                };
+
+                // Get session ID from parent system cookies
+                this.sessionId = this.getSessionFromParentCookie();
+                this.agentId = null; // Will be set after getting user ID
+
+                // State
+                this.currentTask = null;
+                this.audioElement = document.getElementById('audioElement');
+                this.isPlaying = false;
+                this.isLooping = false;
+                this.speedIndex = 2; // Start with normal speed (1.0x)
+                this.speeds = [0.5, 0.75, 1.0]; // Available playback speeds
+                this.transcriptionHistory = [];
+                this.lastTranscription = '';
+
+                this.init();
+            }
+
+            async init() {
+                this.setupAudioListeners();
+                this.setupKeyboardShortcuts();
+                this.setupParentCommunication();
+
+                this.setStatus('Connecting and loading statistics...', 'info');
+
+                // Hide audio and transcription sections initially
+                document.querySelector('.audio-section').style.display = 'none';
+                document.querySelector('.transcription-section').style.display = 'none';
+
+                // Get actual user ID from session ID and then load statistics
+                await this.getUserIdFromSession();
+            }
+
+            async getUserIdFromSession() {
+                try {
+                    if (!this.sessionId) {
+                        throw new Error('No session ID available');
+                    }
+
+                    this.setStatus('Getting user information...', 'info');
+
+                    // Make request using session ID as Bearer token with minimal headers
+                    const response = await fetch(`${this.config.baseUrl}/helpline/api/`, {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': `Bearer ${this.sessionId}`,
+                            'Accept': '*/*',
+                            'User-Agent': 'TranscriptionApp/1.0'
+                        },
+                        mode: 'cors',
+                        credentials: 'omit'
+                    });
+
+                    console.log('User API Response status:', response.status);
+
+                    if (!response.ok) {
+                        throw new Error(`Failed to get user ID: ${response.status}`);
+                    }
+
+                    const userData = await response.json();
+                    console.log('User data received:', userData);
+
+                    // Extract user ID from the response - looking for ID in ss array
+                    if (userData.ss && userData.ss.length > 0 && userData.ss[0].length > 1) {
+                        this.agentId = userData.ss[0][1];
+                        console.log('User ID obtained:', this.agentId);
+                        this.setStatus('User authenticated successfully', 'success');
+
+                        // Now load statistics with the correct agent ID
+                        this.updateStatistics();
+                    } else {
+                        throw new Error('Invalid user data format - no valid agent ID found');
+                    }
+
+                } catch (error) {
+                    console.error('Failed to get user ID:', error);
+                    this.setStatus('Authentication failed - cannot proceed without valid user ID', 'error');
+
+                    // Disable start button since we can't proceed without proper agent ID
+                    const startButton = document.getElementById('startButton');
+                    startButton.disabled = true;
+                    startButton.innerHTML = `
+                        Authentication Failed
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                        </svg>
+                    `;
+                }
+            }
+
+            async startLabelling() {
+                document.getElementById('startButton').disabled = true;
+                document.getElementById('startButton').innerHTML = `
+                    <div class="loading"></div>
+                    Loading Task...
+                `;
+
+                // Hide the statistics section and show header counters
+                document.getElementById('statsSection').style.display = 'none';
+                document.getElementById('headerCounters').style.display = 'flex';
+
+                // Copy current stats to header counters
+                const completedToday = document.getElementById('completedToday').textContent;
+                const totalCompleted = document.getElementById('totalCompleted').textContent;
+                document.getElementById('headerCompletedToday').textContent = completedToday;
+                document.getElementById('headerTotalCompleted').textContent = totalCompleted;
+
+                // Show the audio and transcription sections
+                document.querySelector('.audio-section').style.display = 'block';
+                document.querySelector('.transcription-section').style.display = 'block';
+
+                await this.requestNewTask();
+            }
+
+            getSessionFromParentCookie() {
+                let sessionId = null;
+
+                // Method 1: Try to get from current document cookies
+                try {
+                    const cookies = document.cookie.split(';');
+                    for (let cookie of cookies) {
+                        const [name, value] = cookie.trim().split('=');
+                        if (name === 'HELPLINE_SESSION_ID') {
+                            sessionId = value;
+                            console.log('Session ID found in current document:', sessionId);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Cannot access current document cookies:', e);
+                }
+
+                // Method 2: Try to get from parent window cookies (if in iframe)
+                if (!sessionId && window.parent !== window) {
+                    try {
+                        const parentCookies = window.parent.document.cookie.split(';');
+                        for (let cookie of parentCookies) {
+                            const [name, value] = cookie.trim().split('=');
+                            if (name === 'HELPLINE_SESSION_ID') {
+                                sessionId = value;
+                                console.log('Session ID found in parent document:', sessionId);
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Cannot access parent window cookies (cross-origin restriction):', e);
+                    }
+                }
+
+                // Method 3: Send message to parent to request session ID (iframe-safe approach)
+                if (!sessionId && window.parent !== window) {
+                    try {
+                        window.parent.postMessage({
+                            type: 'REQUEST_SESSION_ID',
+                            source: 'transcription_iframe'
+                        }, '*');
+                    } catch (e) {
+                        console.log('Cannot send message to parent:', e);
+                    }
+                }
+
+                // Method 4: Fallback - generate a temporary session ID
+                if (!sessionId) {
+                    sessionId = 'iframe_session_' + Math.random().toString(36).substr(2, 12);
+                    console.log('Generated fallback session ID:', sessionId);
+
+                    try {
+                        document.cookie = `HELPLINE_SESSION_ID=${sessionId}; path=/`;
+                    } catch (e) {
+                        console.log('Cannot set fallback cookie:', e);
+                    }
+                }
+
+                return sessionId;
+            }
+
+            setupParentCommunication() {
+                window.addEventListener('message', (event) => {
+                    if (event.data && event.data.type) {
+                        switch (event.data.type) {
+                            case 'SESSION_ID_RESPONSE':
+                                if (event.data.sessionId) {
+                                    console.log('Received session ID from parent:', event.data.sessionId);
+                                    this.agentId = event.data.sessionId;
+                                    this.updateStatistics();
+                                    this.requestNewTask();
+                                }
+                                break;
+                            case 'PARENT_READY':
+                                if (!this.agentId || this.agentId.startsWith('iframe_session_')) {
+                                    this.requestSessionIdFromParent();
+                                }
+                                break;
+                        }
+                    }
+                });
+
+                this.notifyParentReady();
+            }
+
+            requestSessionIdFromParent() {
+                try {
+                    window.parent.postMessage({
+                        type: 'REQUEST_SESSION_ID',
+                        source: 'transcription_iframe'
+                    }, '*');
+                } catch (e) {
+                    console.log('Cannot send session ID request to parent:', e);
+                }
+            }
+
+            notifyParentReady() {
+                try {
+                    window.parent.postMessage({
+                        type: 'IFRAME_READY',
+                        source: 'transcription_iframe'
+                    }, '*');
+                } catch (e) {
+                    console.log('Cannot send ready message to parent:', e);
+                }
+            }
+
+            async apiCall(endpoint, options = {}) {
+                const url = `${this.config.serverUrl}${endpoint}`;
+
+                const defaultOptions = {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-API-Key': this.config.apiKey
+                    }
+                };
+
+                try {
+                    console.log('API Call:', url);
+                    console.log('Agent ID:', this.agentId);
+
+                    const response = await fetch(url, { ...defaultOptions, ...options });
+
+                    console.log('Response status:', response.status);
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        console.error('API Error Response:', errorText);
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    return response;
+                } catch (error) {
+                    console.error('API Error:', error);
+
+                    if (error.message.includes('Failed to fetch')) {
+                        throw new Error('Connection failed. Check server and CORS settings for iframe usage.');
+                    }
+
+                    throw error;
+                }
+            }
+
+            async requestNewTask() {
+                try {
+                    this.setStatus('Requesting new task...', 'info');
+
+                    const requestBody = JSON.stringify({
+                        agent_id: this.agentId
+                    });
+
+                    const response = await this.apiCall('/api/tasks/request', {
+                        method: 'POST',
+                        body: requestBody
+                    });
+
+                    const task = await response.json();
+                    this.currentTask = task;
+
+                    // Update UI
+                    document.getElementById('taskId').textContent = `Task #${task.task_id}`;
+
+                    // Load audio
+                    await this.loadAudio();
+
+                    // Set existing transcription if any
+                    if (task.transcription) {
+                        document.getElementById('transcriptionText').value = task.transcription;
+                        this.updateCharCount();
+                    }
+
+                    this.setStatus('Task loaded - start transcribing!', 'success');
+
+                    // Hide the start button once task is loaded
+                    document.getElementById('startButton').style.display = 'none';
+
+                } catch (error) {
+                    console.error('Task request failed:', error);
+
+                    if (error.message.includes('501')) {
+                        this.setStatus('Error: Server endpoint not configured properly.', 'error');
+                    } else if (error.message.includes('404')) {
+                        this.setStatus('Error: API endpoint not found.', 'error');
+                    } else if (error.message.includes('Failed to fetch') || error.message.includes('CORS')) {
+                        this.setStatus('Error: Cannot connect to server. Check connection.', 'error');
+                    } else {
+                        this.setStatus(`Error: ${error.message}`, 'error');
+                    }
+
+                    // Reset start button on error
+                    const startButton = document.getElementById('startButton');
+                    startButton.disabled = false;
+                    startButton.innerHTML = `
+                        Try Again
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                    `;
+                }
+            }
+
+            async updateStatistics() {
+                try {
+                    // Get available task count
+                    const countResponse = await this.apiCall(`/api/tasks/available/count?agent_id=${this.agentId}`);
+                    const counts = await countResponse.json();
+
+                    document.getElementById('availableTasks').textContent = counts.available_for_agent || counts.available_tasks || 0;
+                    document.getElementById('totalUnlabeled').textContent = counts.total_unlabeled || 0;
+
+                    // Try to get agent statistics
+                    try {
+                        const statsResponse = await this.apiCall(`/api/agents/${this.agentId}/stats`);
+                        const stats = await statsResponse.json();
+
+                        document.getElementById('completedToday').textContent = stats.tasks_completed_today || 0;
+                        document.getElementById('totalCompleted').textContent = stats.total_tasks_completed || 0;
+                    } catch (e) {
+                        console.log('Agent stats not available:', e);
+                        document.getElementById('completedToday').textContent = 0;
+                        document.getElementById('totalCompleted').textContent = 0;
+                    }
+
+                    this.setStatus('Ready to start labelling', 'success');
+
+                } catch (error) {
+                    console.error('Failed to update statistics:', error);
+                    this.setStatus('Could not load statistics', 'warning');
+
+                    document.getElementById('availableTasks').textContent = '-';
+                    document.getElementById('totalUnlabeled').textContent = '-';
+                    document.getElementById('completedToday').textContent = '-';
+                    document.getElementById('totalCompleted').textContent = '-';
+                }
+            }
+
+            async loadAudio() {
+                if (!this.currentTask || !this.currentTask.audio_url) {
+                    return;
+                }
+
+                try {
+                    const response = await this.apiCall(this.currentTask.audio_url);
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+
+                    this.audioElement.src = audioUrl;
+
+                    // Update file info
+                    const fileSize = (blob.size / 1024 / 1024).toFixed(2);
+                    document.getElementById('fileInfo').textContent = `${fileSize} MB (${blob.type})`;
+
+                    // Create a simple waveform visualization for .wav files
+                    this.createWaveformVisualization();
+
+                } catch (error) {
+                    console.error('Audio load error:', error);
+                    this.setStatus('Failed to load audio', 'error');
+                }
+            }
+
+            createWaveformVisualization() {
+                const waveformContainer = document.getElementById('waveformContainer');
+                const width = waveformContainer.offsetWidth - 24; // Account for padding
+                const height = 56; // Account for padding
+
+                let bars = '';
+                const barCount = Math.floor(width / 4);
+
+                for (let i = 0; i < barCount; i++) {
+                    const barHeight = Math.random() * height * 0.8 + height * 0.1;
+                    bars += `<div style="
+                        position: absolute;
+                        left: ${i * 4}px;
+                        bottom: ${(height - barHeight) / 2}px;
+                        width: 2px;
+                        height: ${barHeight}px;
+                        background: #F0E68C;
+                        border-radius: 1px;
+                    "></div>`;
+                }
+
+                waveformContainer.innerHTML = `
+                    <div id="waveformDisplay" style="position: relative; width: 100%; height: ${height}px; background: #FFFFFF; border: 2px solid #000; border-radius: 8px; overflow: hidden;">
+                        ${bars}
+                        <div id="waveformPlayhead" class="waveform-playhead" style="left: 12px; display: none;"></div>
+                    </div>
+                `;
+
+                // Add click handler for seeking
+                const waveformDisplay = document.getElementById('waveformDisplay');
+                waveformDisplay.addEventListener('click', (e) => this.handleWaveformClick(e));
+            }
+
+            handleWaveformClick(event) {
+                if (!this.audioElement.duration) return;
+
+                const waveformDisplay = document.getElementById('waveformDisplay');
+                const rect = waveformDisplay.getBoundingClientRect();
+                const clickX = event.clientX - rect.left;
+                const percentage = clickX / rect.width;
+                const seekTime = percentage * this.audioElement.duration;
+
+                this.audioElement.currentTime = Math.max(0, Math.min(seekTime, this.audioElement.duration));
+                this.updateWaveformPlayhead();
+            }
+
+            updateWaveformPlayhead() {
+                const playhead = document.getElementById('waveformPlayhead');
+                const waveformDisplay = document.getElementById('waveformDisplay');
+
+                if (!playhead || !waveformDisplay || !this.audioElement.duration) return;
+
+                const progress = this.audioElement.currentTime / this.audioElement.duration;
+                const waveformWidth = waveformDisplay.offsetWidth;
+                const playheadPosition = progress * waveformWidth;
+
+                playhead.style.left = `${playheadPosition}px`;
+                playhead.style.display = 'block';
+            }
+
+            setupAudioListeners() {
+                this.audioElement.addEventListener('loadedmetadata', () => {
+                    document.getElementById('duration').textContent = this.formatTime(this.audioElement.duration);
+
+                    // Auto-play audio when loaded
+                    this.audioElement.play().then(() => {
+                        this.isPlaying = true;
+                        this.updatePlayButton();
+                        console.log('Audio auto-playing...');
+                    }).catch(error => {
+                        console.log('Auto-play prevented by browser:', error);
+                        this.setStatus('Click play button to start audio', 'info');
+                    });
+                });
+
+                this.audioElement.addEventListener('timeupdate', () => {
+                    const progress = (this.audioElement.currentTime / this.audioElement.duration) * 100;
+                    document.getElementById('progressFill').style.width = `${progress}%`;
+                    document.getElementById('currentTime').textContent = this.formatTime(this.audioElement.currentTime);
+
+                    // Update waveform playhead position
+                    this.updateWaveformPlayhead();
+                });
+
+                this.audioElement.addEventListener('ended', () => {
+                    if (this.isLooping) {
+                        // Restart the audio if looping is enabled
+                        this.audioElement.currentTime = 0;
+                        this.audioElement.play();
+                    } else {
+                        this.isPlaying = false;
+                        this.updatePlayButton();
+                    }
+                });
+
+                this.audioElement.addEventListener('seeked', () => {
+                    // Update playhead position after seeking
+                    this.updateWaveformPlayhead();
+                });
+            }
+
+            setupKeyboardShortcuts() {
+                document.addEventListener('keydown', (e) => {
+                    // Space - Play/Pause
+                    if (e.code === 'Space' && e.target.tagName !== 'TEXTAREA') {
+                        e.preventDefault();
+                        this.togglePlayback();
+                    }
+
+                    // Arrow keys - Seek
+                    if (e.code === 'ArrowLeft') {
+                        e.preventDefault();
+                        this.seekBack();
+                    }
+
+                    if (e.code === 'ArrowRight') {
+                        e.preventDefault();
+                        this.seekForward();
+                    }
+
+                    // Ctrl+Enter - Submit
+                    if (e.ctrlKey && e.code === 'Enter') {
+                        e.preventDefault();
+                        this.submitTranscription();
+                    }
+                });
+            }
+
+            togglePlayback() {
+                if (!this.audioElement.src) return;
+
+                if (this.isPlaying) {
+                    this.audioElement.pause();
+                } else {
+                    this.audioElement.play();
+                }
+
+                this.isPlaying = !this.isPlaying;
+                this.updatePlayButton();
+            }
+
+            updatePlayButton() {
+                document.getElementById('playIcon').style.display = this.isPlaying ? 'none' : 'block';
+                document.getElementById('pauseIcon').style.display = this.isPlaying ? 'block' : 'none';
+            }
+
+            toggleRepeat() {
+                this.isLooping = !this.isLooping;
+                const repeatBtn = document.getElementById('repeatBtn');
+
+                if (this.isLooping) {
+                    repeatBtn.style.background = 'var(--primary)';
+                    repeatBtn.style.color = 'var(--secondary)';
+                    this.setStatus('Repeat enabled', 'info');
+                } else {
+                    repeatBtn.style.background = 'var(--bg-primary)';
+                    repeatBtn.style.color = 'var(--secondary)';
+                    this.setStatus('Repeat disabled', 'info');
+                }
+            }
+
+            toggleSpeed() {
+                // Cycle through speeds: 0.5x -> 0.75x -> 1.0x -> 0.5x...
+                this.speedIndex = (this.speedIndex + 1) % this.speeds.length;
+                const currentSpeed = this.speeds[this.speedIndex];
+                const speedBtn = document.getElementById('speedBtn');
+
+                // Apply the new speed
+                this.audioElement.playbackRate = currentSpeed;
+
+                // Update button appearance and tooltip based on speed
+                if (currentSpeed === 1.0) {
+                    // Normal speed - default appearance
+                    speedBtn.style.background = 'var(--bg-primary)';
+                    speedBtn.style.color = 'var(--secondary)';
+                    speedBtn.title = 'Toggle speed (Currently: Normal 1.0x)';
+                    this.setStatus('Normal speed enabled (1.0x)', 'info');
+                } else {
+                    // Slow speeds - highlighted appearance
+                    speedBtn.style.background = 'var(--primary)';
+                    speedBtn.style.color = 'var(--secondary)';
+                    speedBtn.title = `Toggle speed (Currently: Slow ${currentSpeed}x)`;
+                    this.setStatus(`Slow speed enabled (${currentSpeed}x)`, 'info');
+                }
+            }
+
+            seekBack() {
+                this.audioElement.currentTime = Math.max(0, this.audioElement.currentTime - 5);
+            }
+
+            seekForward() {
+                this.audioElement.currentTime = Math.min(this.audioElement.duration, this.audioElement.currentTime + 5);
+            }
+
+            seekTo(event) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                const percent = (event.clientX - rect.left) / rect.width;
+                this.audioElement.currentTime = percent * this.audioElement.duration;
+            }
+
+            updateCharCount() {
+                const text = document.getElementById('transcriptionText').value;
+                document.getElementById('charCount').textContent = `${text.length} characters`;
+            }
+
+            clearTranscription() {
+                const textarea = document.getElementById('transcriptionText');
+                this.transcriptionHistory.push(textarea.value);
+                textarea.value = '';
+                this.updateCharCount();
+            }
+
+            undoLastEdit() {
+                if (this.transcriptionHistory.length > 0) {
+                    const textarea = document.getElementById('transcriptionText');
+                    const current = textarea.value;
+                    textarea.value = this.transcriptionHistory.pop();
+                    this.lastTranscription = current;
+                    this.updateCharCount();
+                }
+            }
+
+            async submitTranscription() {
+                if (!this.currentTask) {
+                    this.setStatus('No active task to submit', 'error');
+                    return;
+                }
+
+                const transcription = document.getElementById('transcriptionText').value.trim();
+                if (!transcription) {
+                    this.setStatus('Please enter a transcription', 'error');
+                    return;
+                }
+
+                try {
+                    this.setStatus('Submitting transcription...', 'info');
+
+                    const response = await this.apiCall(`/api/tasks/${this.currentTask.task_id}/submit`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            agent_id: this.agentId,
+                            transcription: transcription
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    this.setStatus('Transcription submitted! Loading next task...', 'success');
+
+                    // Update header counters immediately
+                    const headerCompletedToday = document.getElementById('headerCompletedToday');
+                    const headerTotalCompleted = document.getElementById('headerTotalCompleted');
+
+                    headerCompletedToday.textContent = parseInt(headerCompletedToday.textContent) + 1;
+                    headerTotalCompleted.textContent = parseInt(headerTotalCompleted.textContent) + 1;
+
+                    // Notify parent of successful submission
+                    this.notifyParent('TRANSCRIPTION_SUBMITTED', {
+                        taskId: this.currentTask.task_id,
+                        transcription: transcription
+                    });
+
+                    // Clear transcription and automatically request next task
+                    document.getElementById('transcriptionText').value = '';
+                    this.transcriptionHistory = [];
+                    this.updateCharCount();
+
+                    // Automatically request next task after a short delay
+                    setTimeout(() => {
+                        this.requestNewTask();
+                    }, 1500);
+
+                } catch (error) {
+                    this.setStatus(`Submission failed: ${error.message}`, 'error');
+                }
+            }
+
+            async skipTask() {
+                if (!this.currentTask) return;
+
+                if (confirm('Are you sure you want to skip this task?')) {
+                    try {
+                        this.setStatus('Skipping task...', 'info');
+
+                        await this.apiCall(`/api/tasks/${this.currentTask.task_id}/skip`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                agent_id: this.agentId,
+                                reason: 'User requested skip'
+                            })
+                        });
+
+                        this.setStatus('Task skipped! Loading next task...', 'info');
+
+                        // Notify parent of skipped task
+                        this.notifyParent('TASK_SKIPPED', {
+                            taskId: this.currentTask.task_id
+                        });
+
+                        document.getElementById('transcriptionText').value = '';
+                        this.updateCharCount();
+
+                        // Automatically request next task after a short delay
+                        setTimeout(() => {
+                            this.requestNewTask();
+                        }, 1000);
+
+                    } catch (error) {
+                        this.setStatus(`Skip failed: ${error.message}`, 'error');
+                    }
+                }
+            }
+
+            notifyParent(eventType, data = {}) {
+                try {
+                    window.parent.postMessage({
+                        type: eventType,
+                        source: 'transcription_iframe',
+                        data: data
+                    }, '*');
+                } catch (e) {
+                    console.log('Cannot send notification to parent:', e);
+                }
+            }
+
+            setStatus(message, type) {
+                const statusElement = document.getElementById('statusMessage');
+                statusElement.className = `status-message status-${type}`;
+
+                let icon = '';
+                if (type === 'error') icon = '✖ ';
+                if (type === 'success') icon = '✓ ';
+                if (type === 'info') icon = '• ';
+
+                statusElement.innerHTML = `<span>${icon}${message}</span>`;
+            }
+
+            formatTime(seconds) {
+                if (isNaN(seconds)) return '00:00:00:000';
+
+                const hours = Math.floor(seconds / 3600);
+                const mins = Math.floor((seconds % 3600) / 60);
+                const secs = Math.floor(seconds % 60);
+                const ms = Math.floor((seconds % 1) * 1000);
+
+                return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}:${String(ms).padStart(3, '0')}`;
+            }
+        }
+
+        // Initialize app when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            window.app = new TranscriptionApp();
+        });
+    </script>
+</body>
+</html>

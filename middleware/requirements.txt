@@ -1,0 +1,26 @@
+# Audio Transcription Middleware - Essential Dependencies
+
+# Core FastAPI application
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.11.7
+
+# Label Studio integration
+label-studio-sdk==2.0.6
+
+# Task locking and caching
+redis==5.0.1
+
+# Database ORM and migrations
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.13.1
+
+# Audio processing for duration extraction
+librosa==0.11.0
+
+# Configuration management
+python-dotenv==1.0.0
+
+# Note: The following are built-in Python modules (no installation needed):
+# - os, json, logging, datetime, asyncio, glob, typing

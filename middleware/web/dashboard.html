@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Transcription System - Dashboard</title>
+    <style>
+        :root {
+            --primary: #F0E68C;
+            --primary-hover: #FFA500;
+            --primary-light: rgba(240, 230, 140, 0.15);
+            --primary-lighter: rgba(240, 230, 140, 0.08);
+            --secondary: #000000;
+            --secondary-light: #333333;
+            --success: #4CAF50;
+            --error: #F44336;
+            --warning: #FF9800;
+            --info: #2196F3;
+            --bg-primary: #FFFFFF;
+            --bg-secondary: #F8F8F8;
+            --bg-tertiary: #000000;
+            --text-primary: #000000;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+            --text-white: #FFFFFF;
+            --border: #000000;
+            --border-light: #CCCCCC;
+            --shadow: 0 2px 4px rgba(0,0,0,0.1);
+            --radius: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: var(--bg-tertiary);
+            border-bottom: 3px solid var(--primary);
+            padding: 16px 24px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--primary);
+            letter-spacing: -0.02em;
+            text-transform: uppercase;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .last-updated {
+            color: var(--text-white);
+            font-size: 14px;
+        }
+
+        .refresh-btn {
+            background: var(--primary);
+            color: var(--secondary);
+            border: 2px solid var(--secondary);
+            padding: 8px 16px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: var(--primary-hover);
+        }
+
+        /* Main Content */
+        .main-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+            margin-bottom: 32px;
+        }
+
+        /* Cards */
+        .card {
+            background: var(--bg-primary);
+            border: 2px solid var(--border-light);
+            border-radius: var(--radius);
+            padding: 24px;
+            box-shadow: var(--shadow);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .card-subtitle {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Stats Overview */
+        .stats-overview {
+            grid-column: 1 / -1;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .stat-item {
+            background: var(--primary-lighter);
+            padding: 16px;
+            border-radius: var(--radius);
+            text-align: center;
+            border: 1px solid var(--primary);
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--secondary);
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Live Stats */
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            color: var(--success);
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* Tables */
+        .table-container {
+            overflow-x: auto;
+            margin-top: 16px;
+        }
+
+        /* Scrollable table container - fixed height with scroll */
+        .scrollable-table {
+            max-height: 500px;
+            overflow-y: auto;
+            overflow-x: auto;
+        }
+
+        .leaderboard-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .leaderboard-table th,
+        .leaderboard-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .leaderboard-table th {
+            background: var(--bg-secondary);
+            font-weight: 600;
+            color: var(--text-primary);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .leaderboard-table tr:hover {
+            background: var(--primary-lighter);
+        }
+
+        .rank-cell {
+            text-align: center;
+            font-weight: 700;
+            width: 60px;
+        }
+
+        .rank-1 { color: #FFD700; }
+        .rank-2 { color: #C0C0C0; }
+        .rank-3 { color: #CD7F32; }
+
+        .agent-id {
+            font-weight: 600;
+            color: var(--secondary);
+        }
+
+        .currency {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .percentage {
+            color: var(--info);
+            font-weight: 600;
+        }
+
+        /* Filters */
+        .filters {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius);
+            background: var(--bg-primary);
+            font-size: 14px;
+        }
+
+        .filter-select:focus {
+            outline: 2px solid var(--primary);
+            border-color: var(--primary);
+        }
+
+        /* Loading States */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-light);
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Error States */
+        .error {
+            background: #ffe6e6;
+            border: 1px solid var(--error);
+            color: var(--error);
+            padding: 16px;
+            border-radius: var(--radius);
+            text-align: center;
+        }
+
+        /* Status Badges */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-active {
+            background: var(--success);
+            color: white;
+        }
+
+        .status-inactive {
+            background: var(--text-muted);
+            color: white;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .main-content {
+                padding: 16px;
+            }
+
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .filters {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="logo">Audio Transcription Dashboard</div>
+            <div class="header-right">
+                <div class="last-updated">
+                    <span class="live-indicator">
+                        <span class="live-dot"></span>
+                        LIVE
+                    </span>
+                    Last updated: <span id="lastUpdated">--</span>
+                </div>
+                <button class="refresh-btn" onclick="refreshDashboard()">
+                    Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <!-- System Overview -->
+        <div class="dashboard-grid">
+            <div class="card stats-overview">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">System Overview</div>
+                        <div class="card-subtitle">Real-time system statistics</div>
+                    </div>
+                </div>
+                <div class="stats-grid" id="systemOverview">
+                    <div class="loading">Loading system overview...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Stats -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Live Activity</div>
+                        <div class="card-subtitle">Current system status</div>
+                    </div>
+                </div>
+                <div id="liveStats">
+                    <div class="loading">Loading live stats...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Task Queue</div>
+                        <div class="card-subtitle">Available work status</div>
+                    </div>
+                </div>
+                <div id="taskQueue">
+                    <div class="loading">Loading task queue...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Leaderboards -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">🏆 Top Performers</div>
+                        <div class="card-subtitle">Ranked by tasks completed</div>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select class="filter-select" id="performersPeriod" onchange="loadTopPerformers()">
+                        <option value="">All Time</option>
+                        <option value="7">Last 7 Days</option>
+                        <option value="30">Last 30 Days</option>
+                    </select>
+                </div>
+                <div class="table-container">
+                    <div id="topPerformersTable">
+                        <div class="loading">Loading leaderboard...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">💰 Top Earners</div>
+                        <div class="card-subtitle">Ranked by earnings</div>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select class="filter-select" id="earnersPeriod" onchange="loadTopEarners()">
+                        <option value="">All Time</option>
+                        <option value="7">Last 7 Days</option>
+                        <option value="30">Last 30 Days</option>
+                    </select>
+                    <input type="number" class="filter-select" id="earnersLimit" placeholder="Limit (default: 10)" min="1" max="100" onchange="loadTopEarners()" style="width: 180px;">
+                </div>
+                <div class="table-container scrollable-table">
+                    <div id="topEarnersTable">
+                        <div class="loading">Loading leaderboard...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">⚡ Most Productive</div>
+                        <div class="card-subtitle">Ranked by efficiency (avg time per task)</div>
+                    </div>
+                </div>
+                <div class="filters">
+                    <input type="number" class="filter-select" id="productivityLimit" placeholder="Limit (default: 10)" min="1" max="100" onchange="loadProductivity()" style="width: 180px;">
+                </div>
+                <div class="table-container scrollable-table">
+                    <div id="productivityTable">
+                        <div class="loading">Loading leaderboard...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">👥 Active Agents</div>
+                        <div class="card-subtitle">Currently active workers</div>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <div id="activeAgentsTable">
+                        <div class="loading">Loading active agents...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_BASE = ''; // Same origin
+        const API_KEY = 'tqvdCM+/Bkm1rRZOGuMHByXYEtNqXCVy1kOGrh3umVQ='; // Will be replaced by server
+        const REFRESH_INTERVAL = 30000; // 30 seconds
+
+        // Global state
+        let refreshTimer;
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDashboard();
+            startAutoRefresh();
+        });
+
+        async function apiCall(endpoint, params = {}) {
+            const url = new URL(API_BASE + endpoint, window.location.origin);
+            Object.keys(params).forEach(key => {
+                if (params[key] !== null && params[key] !== undefined && params[key] !== '') {
+                    url.searchParams.append(key, params[key]);
+                }
+            });
+
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'X-API-Key': API_KEY
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error('API call failed:', error);
+                throw error;
+            }
+        }
+
+        async function loadDashboard() {
+            updateLastUpdated();
+
+            // Load all dashboard components
+            await Promise.all([
+                loadSystemOverview(),
+                loadLiveStats(),
+                loadTaskQueue(),
+                loadTopPerformers(),
+                loadTopEarners(),
+                loadProductivity(),
+                loadActiveAgents()
+            ]);
+        }
+
+        function updateLastUpdated() {
+            document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+        }
+
+        async function loadSystemOverview() {
+            try {
+                const data = await apiCall('/api/stats/system/overview');
+
+                document.getElementById('systemOverview').innerHTML = `
+                    <div class="stat-item">
+                        <span class="stat-value">${data.system_totals.total_agents}</span>
+                        <div class="stat-label">Total Agents</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${data.current_activity.active_agents_24h}</span>
+                        <div class="stat-label">Active (24h)</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${data.system_totals.total_tasks_completed.toLocaleString()}</span>
+                        <div class="stat-label">Tasks Completed</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${Math.round(data.system_totals.total_duration_seconds / 3600).toLocaleString()}</span>
+                        <div class="stat-label">Total Hours</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value currency">$${data.system_totals.total_earnings.toLocaleString()}</span>
+                        <div class="stat-label">Total Earnings</div>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${data.current_activity.available_tasks}</span>
+                        <div class="stat-label">Available Tasks</div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading system overview:', error);
+                document.getElementById('systemOverview').innerHTML =
+                    '<div class="error">Failed to load system overview</div>';
+            }
+        }
+
+        async function loadLiveStats() {
+            try {
+                const data = await apiCall('/api/stats/live');
+
+                document.getElementById('liveStats').innerHTML = `
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-value">${data.active_sessions.count}</span>
+                            <div class="stat-label">Working Now</div>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.today_activity.completed}</span>
+                            <div class="stat-label">Completed Today</div>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value currency">$${data.today_activity.earnings}</span>
+                            <div class="stat-label">Earned Today</div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading live stats:', error);
+                document.getElementById('liveStats').innerHTML =
+                    '<div class="error">Failed to load live stats</div>';
+            }
+        }
+
+        async function loadTaskQueue() {
+            try {
+                const data = await apiCall('/api/tasks/available/count');
+
+                document.getElementById('taskQueue').innerHTML = `
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-value">${data.available_tasks}</span>
+                            <div class="stat-label">Available Tasks</div>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.total_unlabeled - data.available_tasks}</span>
+                            <div class="stat-label">Currently Assigned</div>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${data.total_unlabeled}</span>
+                            <div class="stat-label">Total Unlabeled</div>
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                console.error('Error loading task queue:', error);
+                document.getElementById('taskQueue').innerHTML =
+                    '<div class="error">Failed to load task queue</div>';
+            }
+        }
+
+        async function loadTopPerformers() {
+            try {
+                const period = document.getElementById('performersPeriod')?.value || '';
+                const data = await apiCall('/api/leaderboard/top-performers', {
+                    period_days: period,
+                    limit: 10
+                });
+
+                const tableHtml = `
+                    <table class="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Agent ID</th>
+                                <th>Tasks</th>
+                                <th>Rate</th>
+                                <th>Earnings</th>
+                                <th>Avg Duration</th>
+                                <th>Last Active</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.leaderboard.map(agent => `
+                                <tr>
+                                    <td class="rank-cell rank-${agent.rank <= 3 ? agent.rank : ''}">#${agent.rank}</td>
+                                    <td class="agent-id">${agent.agent_id}</td>
+                                    <td>${agent.tasks_completed.toLocaleString()}</td>
+                                    <td class="percentage">${agent.completion_rate}%</td>
+                                    <td class="currency">$${agent.total_earnings.toLocaleString()}</td>
+                                    <td>${agent.avg_duration_per_task}s</td>
+                                    <td>${agent.last_active ? new Date(agent.last_active).toLocaleDateString() : 'Never'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('topPerformersTable').innerHTML = tableHtml;
+            } catch (error) {
+                console.error('Error loading top performers:', error);
+                document.getElementById('topPerformersTable').innerHTML =
+                    '<div class="error">Failed to load top performers</div>';
+            }
+        }
+
+        async function loadTopEarners() {
+            try {
+                const period = document.getElementById('earnersPeriod')?.value || '';
+                const limitInput = document.getElementById('earnersLimit')?.value;
+                const limit = limitInput && parseInt(limitInput) > 0 ? parseInt(limitInput) : 10;
+                
+                const data = await apiCall('/api/leaderboard/earnings', {
+                    period_days: period,
+                    limit: limit
+                });
+
+                const tableHtml = `
+                    <table class="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Agent ID</th>
+                                <th>${period ? 'Period' : 'Lifetime'} Earnings</th>
+                                <th>Tasks</th>
+                                <th>Duration</th>
+                                <th>Last Active</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.leaderboard.map(agent => `
+                                <tr>
+                                    <td class="rank-cell rank-${agent.rank <= 3 ? agent.rank : ''}">#${agent.rank}</td>
+                                    <td class="agent-id">${agent.agent_id}</td>
+                                    <td class="currency">$${agent.earnings.toLocaleString()}</td>
+                                    <td>${agent.tasks_completed.toLocaleString()}</td>
+                                    <td>${Math.round(agent.duration_seconds / 60).toLocaleString()}m</td>
+                                    <td>${agent.last_active ? new Date(agent.last_active).toLocaleDateString() : 'Never'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('topEarnersTable').innerHTML = tableHtml;
+            } catch (error) {
+                console.error('Error loading top earners:', error);
+                document.getElementById('topEarnersTable').innerHTML =
+                    '<div class="error">Failed to load top earners</div>';
+            }
+        }
+
+        async function loadProductivity() {
+            try {
+                const limitInput = document.getElementById('productivityLimit')?.value;
+                const limit = limitInput && parseInt(limitInput) > 0 ? parseInt(limitInput) : 10;
+                
+                const data = await apiCall('/api/leaderboard/productivity', { limit: limit });
+
+                const tableHtml = `
+                    <table class="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Agent ID</th>
+                                <th>Avg Time/Task</th>
+                                <th>Tasks</th>
+                                <th>Duration</th>
+                                <th>Earnings</th>
+                                <th>Last Active</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.leaderboard.map(agent => `
+                                <tr>
+                                    <td class="rank-cell rank-${agent.rank <= 3 ? agent.rank : ''}">#${agent.rank}</td>
+                                    <td class="agent-id">${agent.agent_id}</td>
+                                    <td class="info">${agent.avg_time_per_task}s</td>
+                                    <td>${agent.tasks_completed}</td>
+                                    <td>${Math.round(agent.total_duration_seconds / 60)}m</td>
+                                    <td class="currency">$${agent.total_earnings.toLocaleString()}</td>
+                                    <td>${agent.last_active ? new Date(agent.last_active).toLocaleDateString() : 'Never'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('productivityTable').innerHTML = tableHtml;
+            } catch (error) {
+                console.error('Error loading productivity leaderboard:', error);
+                document.getElementById('productivityTable').innerHTML =
+                    '<div class="error">Failed to load productivity leaderboard</div>';
+            }
+        }
+
+        async function loadActiveAgents() {
+            try {
+                const data = await apiCall('/api/stats/agents/active');
+
+                const tableHtml = `
+                    <table class="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Agent ID</th>
+                                <th>Status</th>
+                                <th>Today Tasks</th>
+                                <th>Today Earnings</th>
+                                <th>Last Active</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.agents.slice(0, 10).map(agent => `
+                                <tr>
+                                    <td class="agent-id">${agent.agent_id}</td>
+                                    <td>
+                                        <span class="status-badge ${agent.currently_active ? 'status-active' : 'status-inactive'}">
+                                            ${agent.currently_active ? 'Working' : 'Idle'}
+                                        </span>
+                                    </td>
+                                    <td>${agent.today_completed}</td>
+                                    <td class="currency">$${agent.total_earnings.toLocaleString()}</td>
+                                    <td>${agent.last_active ? new Date(agent.last_active).toLocaleTimeString() : 'Never'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `;
+
+                document.getElementById('activeAgentsTable').innerHTML = tableHtml;
+            } catch (error) {
+                console.error('Error loading active agents:', error);
+                document.getElementById('activeAgentsTable').innerHTML =
+                    '<div class="error">Failed to load active agents</div>';
+            }
+        }
+
+        function refreshDashboard() {
+            loadDashboard();
+        }
+
+        function startAutoRefresh() {
+            refreshTimer = setInterval(() => {
+                loadDashboard();
+            }, REFRESH_INTERVAL);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
+        }
+
+        // Page visibility API to pause/resume auto-refresh
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+                loadDashboard();
+            }
+        });
+    </script>
+</body>
+</html>

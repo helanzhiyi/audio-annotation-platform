@@ -1,0 +1,1384 @@
+from fastapi import FastAPI, HTTPException, Header, Security, Depends
+from fastapi.security import APIKeyHeader
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime, timedelta
+import os
+from label_studio_sdk import Client
+import redis
+import redis.asyncio as aioredis
+import httpx
+import json
+import logging
+from dotenv import load_dotenv
+import asyncio
+import csv
+import io
+from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from models import TranscriptionSession, AgentStats, get_db, test_connection, create_tables
+from models_async import (
+    TranscriptionSession as AsyncTranscriptionSession,
+    AgentStats as AsyncAgentStats,
+    get_async_db,
+    create_tables as create_async_tables,
+    test_connection as test_async_connection
+)
+
+# Load environment variables
+load_dotenv('config.env')
+
+app = FastAPI(title="Label Studio ASR Middleware")
+
+# Configuration
+LS_URL = os.getenv("LABEL_STUDIO_URL", "http://localhost:8080")
+LS_API_KEY = os.getenv("LABEL_STUDIO_API_KEY")
+PROJECT_ID = int(os.getenv("LS_PROJECT_ID", "1"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+TZ_SYSTEM_API_KEY = os.getenv("TZ_SYSTEM_API_KEY")
+
+# Initialize clients
+ls_client = Client(url=LS_URL, api_key=LS_API_KEY)
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+project = ls_client.get_project(PROJECT_ID)
+
+# Logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Async clients - will be initialized on startup
+async_redis_client = None
+httpx_client = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize async clients on startup"""
+    global async_redis_client, httpx_client
+    async_redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+    httpx_client = httpx.AsyncClient(timeout=30.0)
+    await create_async_tables()
+    logger.info("Async clients initialized")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    if async_redis_client:
+        await async_redis_client.close()
+    if httpx_client:
+        await httpx_client.aclose()
+    logger.info("Async clients closed")
+
+# CORS - Update with actual TZ IPs in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Security
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_tz_system(api_key: str = Security(api_key_header)):
+    """Verify the request is from TZ system"""
+    if api_key != TZ_SYSTEM_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    return True
+
+# Models
+class TaskRequest(BaseModel):
+    agent_id: int
+    limit: int = 1
+
+class TranscriptionSubmit(BaseModel):
+    agent_id: int
+    transcription: str
+
+class TaskSkip(BaseModel):
+    agent_id: int
+    reason: Optional[str] = None
+
+class TaskResponse(BaseModel):
+    task_id: int
+    audio_url: str
+    duration: Optional[float]
+    metadata: dict
+
+# Core endpoints
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Check Label Studio
+        ls_client.check_connection()
+        # Check Redis
+        await async_redis_client.ping()
+        return {
+            "status": "healthy",
+            "label_studio": "connected",
+            "redis": "connected",
+            "project_id": PROJECT_ID
+        }
+    except Exception as e:
+        return {"status": "unhealthy", "error": str(e)}
+
+@app.post("/api/tasks/request", response_model=TaskResponse)
+async def request_task_for_agent(
+    request: TaskRequest,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Request a task for a specific agent"""
+    
+    # Check if agent already has an active task
+    active_task_key = f"agent:active:{request.agent_id}"
+    active_task = await async_redis_client.get(active_task_key)
+    
+    if active_task:
+        task_data = json.loads(active_task)
+        logger.info(f"Agent {request.agent_id} already has task {task_data['task_id']}")
+        return TaskResponse(**task_data)
+    
+    try:
+        # Get unlabeled tasks from Label Studio
+        tasks = project.get_unlabeled_tasks()
+        
+        if not tasks:
+            raise HTTPException(status_code=404, detail="No tasks available")
+        
+        # Find a task that's not currently assigned and not recently skipped by this agent
+        for task in tasks:
+            task_lock_key = f"task:locked:{task['id']}"
+            skip_key = f"task:skipped:{task['id']}:{request.agent_id}"
+
+            # Skip tasks recently skipped by this agent
+            if await async_redis_client.exists(skip_key):
+                continue
+
+            # Try to acquire lock on this task (atomic operation)
+            if await async_redis_client.set(task_lock_key, request.agent_id, nx=True, ex=3600):
+                # Successfully locked this task for the agent
+                
+                task_data = {
+                    "task_id": task['id'],
+                    "audio_url": f"/api/audio/stream/{task['id']}/{request.agent_id}",
+                    "duration": task.get('data', {}).get('duration'),
+                    "metadata": task.get('data', {}).get('metadata', {})
+                }
+                
+                # Store agent's active task
+                await async_redis_client.setex(
+                    active_task_key,
+                    3600,  # 1 hour to complete
+                    json.dumps(task_data)
+                )
+                
+                # Store in PostgreSQL
+                transcription_session = TranscriptionSession(
+                    agent_id=request.agent_id,
+                    task_id=task['id'],
+                    assigned_at=datetime.utcnow(),
+                    duration_seconds=task.get('data', {}).get('duration'),
+                    status='assigned'
+                )
+                db.add(transcription_session)
+                db.commit()
+
+                # Update agent stats
+                agent_stats = db.query(AgentStats).filter(AgentStats.agent_id == request.agent_id).first()
+                if not agent_stats:
+                    agent_stats = AgentStats(agent_id=request.agent_id)
+                    db.add(agent_stats)
+                agent_stats.last_active = datetime.utcnow()
+                db.commit()
+
+                # Legacy Redis audit log (for transition period)
+                await async_redis_client.lpush(
+                    "audit:assignments",
+                    json.dumps({
+                        "agent_id": request.agent_id,
+                        "task_id": task['id'],
+                        "assigned_at": datetime.utcnow().isoformat()
+                    })
+                )
+                
+                logger.info(f"Assigned task {task['id']} to agent {request.agent_id}")
+                return TaskResponse(**task_data)
+        
+        # No unlocked tasks available
+        raise HTTPException(status_code=404, detail="All tasks are currently assigned")
+        
+    except Exception as e:
+        logger.error(f"Error requesting task: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/audio/stream/{task_id}/{agent_id}")
+async def stream_audio(
+    task_id: int,
+    agent_id: int,
+    authorized: bool = Security(verify_tz_system)
+):
+    """Stream audio file directly from filesystem"""
+    # Verify this agent has access to this task (NOW ASYNC)
+    task_lock_key = f"task:locked:{task_id}"
+    locked_by = await async_redis_client.get(task_lock_key)
+
+    # Convert locked_by to int for comparison (Redis stores as string)
+    if locked_by is None or int(locked_by) != agent_id:
+        logger.warning(f"Agent {agent_id} tried to access task {task_id} locked by {locked_by}")
+        raise HTTPException(status_code=403, detail="Access denied to this audio")
+
+    try:
+        # Get task from Label Studio using async HTTP (NOW ASYNC)
+        headers = {"Authorization": f"Token {LS_API_KEY}"}
+        response = await httpx_client.get(
+            f"{LS_URL}/api/tasks/{task_id}",
+            headers=headers
+        )
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        task = response.json()
+        audio_path = task['data'].get('audio')
+
+        if not audio_path:
+            raise HTTPException(status_code=404, detail="No audio found")
+
+        logger.info(f"Task {task_id}: Raw audio_path from Label Studio: {audio_path}")
+
+        # Convert Label Studio path to filesystem path
+        if audio_path.startswith('/data/media/'):
+            file_path = audio_path.replace('/data/media/', '/opt/label-studio/media/')
+        elif audio_path.startswith('/data/'):
+            file_path = audio_path.replace('/data/', '/opt/label-studio/')
+        else:
+            file_path = f"/opt/label-studio/media/{audio_path}"
+
+        logger.info(f"Task {task_id}: Converted file_path: {file_path}")
+
+        # Check if file exists (this is fast, but could use aiofiles if needed)
+        if not os.path.exists(file_path):
+            logger.error(f"Audio file not found: {file_path}")
+            raise HTTPException(status_code=404, detail="Audio file not found on disk")
+
+        # Determine content type from file extension
+        file_ext = os.path.splitext(file_path)[1].lower()
+        content_type_map = {
+            '.wav': 'audio/wav',
+            '.mp3': 'audio/mpeg',
+            '.m4a': 'audio/mp4',
+            '.ogg': 'audio/ogg',
+            '.flac': 'audio/flac',
+            '.webm': 'audio/webm',
+            '.opus': 'audio/opus'
+        }
+        media_type = content_type_map.get(file_ext, 'audio/mpeg')
+
+        # Audit log (NOW ASYNC)
+        await async_redis_client.lpush(
+            "audit:audio_access",
+            json.dumps({
+                "agent_id": agent_id,
+                "task_id": task_id,
+                "accessed_at": datetime.utcnow().isoformat(),
+                "file_path": file_path
+            })
+        )
+
+        logger.info(f"Serving audio file: {file_path} to agent {agent_id}")
+
+        # Serve file directly - FastAPI handles range requests automatically
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            filename=f"task_{task_id}{file_ext}",
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "Accept-Ranges": "bytes"
+            }
+        )
+
+    except httpx.HTTPError as e:
+        logger.error(f"Error fetching task from Label Studio: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch task data")
+    except Exception as e:
+        logger.error(f"Error streaming audio: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tasks/{task_id}/submit")
+async def submit_transcription(
+    task_id: int,
+    submission: TranscriptionSubmit,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Submit transcription for a task"""
+    
+    # Verify agent has this task locked
+    task_lock_key = f"task:locked:{task_id}"
+    locked_by = await async_redis_client.get(task_lock_key)
+    
+    if locked_by is None or int(locked_by) != submission.agent_id:
+        logger.warning(f"Agent {submission.agent_id} tried to submit for task {task_id}")
+        raise HTTPException(status_code=403, detail="Cannot submit for this task")
+    
+    try:
+        # Create annotation in Label Studio
+        annotation_result = [{
+            "value": {
+                "text": [submission.transcription]
+            },
+            "from_name": "transcription",
+            "to_name": "audio",
+            "type": "textarea"
+        }]
+        
+        # Submit annotation
+        task = project.get_task(task_id)
+        annotation = project.create_annotation(
+            task_id,
+            result=annotation_result
+        )
+        
+        # Update PostgreSQL transcription session
+        session = db.query(TranscriptionSession).filter(
+            TranscriptionSession.agent_id == submission.agent_id,
+            TranscriptionSession.task_id == task_id,
+            TranscriptionSession.status == 'assigned'
+        ).first()
+
+        if session:
+            session.completed_at = datetime.utcnow()
+            session.status = 'completed'
+            session.transcription_length = len(submission.transcription)
+
+            # Update agent stats
+            agent_stats = db.query(AgentStats).filter(AgentStats.agent_id == submission.agent_id).first()
+            if agent_stats and session.duration_seconds:
+                agent_stats.total_duration_seconds += session.duration_seconds
+                agent_stats.total_tasks_completed += 1
+                agent_stats.last_active = datetime.utcnow()
+                # Calculate earnings ($0.45 per minute)
+                earnings_per_minute = 0.45
+                session_earnings = (session.duration_seconds / 60) * earnings_per_minute
+                agent_stats.total_earnings += session_earnings
+
+            db.commit()
+
+        # Clean up Redis
+        await async_redis_client.delete(task_lock_key)
+        await async_redis_client.delete(f"agent:active:{submission.agent_id}")
+
+        # Legacy Redis audit log (for transition period)
+        redis_client.lpush(
+            "audit:completions",
+            json.dumps({
+                "agent_id": submission.agent_id,
+                "task_id": task_id,
+                "completed_at": datetime.utcnow().isoformat(),
+                "transcription_length": len(submission.transcription)
+            })
+        )
+        
+        logger.info(f"Agent {submission.agent_id} completed task {task_id}")
+        
+        return {
+            "status": "success",
+            "message": "Transcription submitted successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"Error submitting transcription: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tasks/{task_id}/skip")
+async def skip_task(
+    task_id: int,
+    skip_data: TaskSkip,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Skip a task and release it for other agents"""
+
+    # Verify agent has this task locked
+    task_lock_key = f"task:locked:{task_id}"
+    locked_by = await async_redis_client.get(task_lock_key)
+
+    if locked_by is None or int(locked_by) != skip_data.agent_id:
+        logger.warning(f"Agent {skip_data.agent_id} tried to skip task {task_id} locked by {locked_by}")
+        raise HTTPException(status_code=403, detail="Cannot skip task not assigned to you")
+
+    try:
+        # Mark task as skipped by this agent (prevent immediate reassignment)
+        skip_key = f"task:skipped:{task_id}:{skip_data.agent_id}"
+        await async_redis_client.setex(skip_key, 1800, "skipped")  # 30 minutes cooldown
+
+        # Update PostgreSQL transcription session
+        session = db.query(TranscriptionSession).filter(
+            TranscriptionSession.agent_id == skip_data.agent_id,
+            TranscriptionSession.task_id == task_id,
+            TranscriptionSession.status == 'assigned'
+        ).first()
+
+        if session:
+            session.status = 'skipped'
+            session.skip_reason = skip_data.reason or "No reason provided"
+
+            # Update agent stats
+            agent_stats = db.query(AgentStats).filter(AgentStats.agent_id == skip_data.agent_id).first()
+            if agent_stats:
+                agent_stats.total_tasks_skipped += 1
+                agent_stats.last_active = datetime.utcnow()
+
+            db.commit()
+
+        # Clean up Redis locks
+        await async_redis_client.delete(task_lock_key)
+        await async_redis_client.delete(f"agent:active:{skip_data.agent_id}")
+
+        # Legacy Redis audit log (for transition period)
+        redis_client.lpush(
+            "audit:skips",
+            json.dumps({
+                "agent_id": skip_data.agent_id,
+                "task_id": task_id,
+                "skipped_at": datetime.utcnow().isoformat(),
+                "reason": skip_data.reason or "No reason provided"
+            })
+        )
+
+        logger.info(f"Agent {skip_data.agent_id} skipped task {task_id}: {skip_data.reason}")
+
+        return {
+            "status": "success",
+            "message": "Task skipped successfully"
+        }
+
+    except Exception as e:
+        logger.error(f"Error skipping task: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/tasks/available/count")
+async def get_available_task_count(
+    agent_id: Optional[int] = None,
+    authorized: bool = Security(verify_tz_system)
+):
+    """Get count of available unassigned tasks"""
+    try:
+        tasks = project.get_unlabeled_tasks()
+
+        # Count tasks not currently locked
+        available = 0
+        available_for_agent = 0
+
+        for task in tasks:
+            task_id = task['id']
+            is_locked = await async_redis_client.exists(f"task:locked:{task_id}")
+
+            if not is_locked:
+                available += 1
+
+                # If agent_id provided, check if this task is available for that specific agent
+                if agent_id:
+                    skip_key = f"task:skipped:{task_id}:{agent_id}"
+                    if not await async_redis_client.exists(skip_key):
+                        available_for_agent += 1
+
+        result = {
+            "available_tasks": available,
+            "total_unlabeled": len(tasks)
+        }
+
+        if agent_id:
+            result["available_for_agent"] = available_for_agent
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error counting tasks: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/agents/{agent_id}/stats")
+async def get_agent_stats(
+    agent_id: int,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get statistics for a specific agent"""
+
+    # Get agent stats from PostgreSQL
+    agent_stats = db.query(AgentStats).filter(AgentStats.agent_id == agent_id).first()
+    if not agent_stats:
+        agent_stats = AgentStats(agent_id=agent_id)
+        db.add(agent_stats)
+        db.commit()
+
+    # Get today's completions
+    today = datetime.utcnow().date()
+    today_completions = db.query(TranscriptionSession).filter(
+        TranscriptionSession.agent_id == agent_id,
+        TranscriptionSession.status == 'completed',
+        TranscriptionSession.completed_at >= datetime.combine(today, datetime.min.time())
+    ).count()
+
+    # Check current task from Redis (for active sessions)
+    active_task = await async_redis_client.get(f"agent:active:{agent_id}")
+    current_task_id = None
+    if active_task:
+        current_task_id = json.loads(active_task)['task_id']
+
+    return {
+        "agent_id": agent_id,
+        "current_task_id": current_task_id,
+        "tasks_completed_today": today_completions,
+        "total_tasks_completed": agent_stats.total_tasks_completed,
+        "total_tasks_skipped": agent_stats.total_tasks_skipped,
+        "total_duration_seconds": agent_stats.total_duration_seconds,
+        "total_earnings": round(agent_stats.total_earnings, 2),
+        "last_active": agent_stats.last_active.isoformat() if agent_stats.last_active else None
+    }
+
+@app.get("/api/agents/{agent_id}/earnings")
+async def get_agent_earnings(
+    agent_id: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get detailed earnings report for a specific agent"""
+
+    # Parse date parameters
+    start_dt = None
+    end_dt = None
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date)
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date)
+
+    # Get agent stats
+    agent_stats = db.query(AgentStats).filter(AgentStats.agent_id == agent_id).first()
+    if not agent_stats:
+        agent_stats = AgentStats(agent_id=agent_id)
+        db.add(agent_stats)
+        db.commit()
+
+    # Build query for sessions
+    sessions_query = db.query(TranscriptionSession).filter(
+        TranscriptionSession.agent_id == agent_id,
+        TranscriptionSession.status == 'completed'
+    )
+
+    if start_dt:
+        sessions_query = sessions_query.filter(TranscriptionSession.completed_at >= start_dt)
+    if end_dt:
+        sessions_query = sessions_query.filter(TranscriptionSession.completed_at <= end_dt)
+
+    sessions = sessions_query.all()
+
+    # Calculate detailed metrics
+    total_sessions = len(sessions)
+    total_duration = sum(s.duration_seconds or 0 for s in sessions)
+    total_minutes = total_duration / 60
+
+    # Calculate earnings ($0.45 per minute)
+    earnings_per_minute = 0.45
+    period_earnings = total_minutes * earnings_per_minute
+
+    # Group by date for daily breakdown
+    daily_stats = {}
+    for session in sessions:
+        if session.completed_at:
+            date_key = session.completed_at.date().isoformat()
+            if date_key not in daily_stats:
+                daily_stats[date_key] = {
+                    "sessions": 0,
+                    "duration_seconds": 0,
+                    "earnings": 0.0
+                }
+            daily_stats[date_key]["sessions"] += 1
+            daily_stats[date_key]["duration_seconds"] += session.duration_seconds or 0
+            daily_stats[date_key]["earnings"] += (session.duration_seconds or 0) / 60 * earnings_per_minute
+
+    return {
+        "agent_id": agent_id,
+        "period": {
+            "start_date": start_date,
+            "end_date": end_date
+        },
+        "summary": {
+            "total_sessions": total_sessions,
+            "total_duration_seconds": total_duration,
+            "total_duration_minutes": round(total_minutes, 2),
+            "total_earnings": round(period_earnings, 2),
+            "earnings_rate_per_minute": earnings_per_minute,
+            "average_session_duration": round(total_duration / total_sessions, 2) if total_sessions > 0 else 0
+        },
+        "lifetime_stats": {
+            "total_tasks_completed": agent_stats.total_tasks_completed,
+            "total_tasks_skipped": agent_stats.total_tasks_skipped,
+            "total_duration_seconds": agent_stats.total_duration_seconds,
+            "total_earnings": round(agent_stats.total_earnings, 2),
+            "last_active": agent_stats.last_active.isoformat() if agent_stats.last_active else None
+        },
+        "daily_breakdown": daily_stats
+    }
+
+@app.get("/api/leaderboard/top-performers")
+async def get_top_performers_leaderboard(
+    limit: int = 10,
+    period_days: Optional[int] = None,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get leaderboard of top performing agents by tasks completed"""
+
+    # Get agent stats
+    agents_query = db.query(AgentStats).filter(AgentStats.total_tasks_completed > 0)
+
+    # If period specified, also filter by recent activity
+    if period_days:
+        cutoff_date = datetime.utcnow() - timedelta(days=period_days)
+        agents_query = agents_query.filter(AgentStats.last_active >= cutoff_date)
+
+    agents = agents_query.order_by(AgentStats.total_tasks_completed.desc()).limit(limit).all()
+
+    leaderboard = []
+    for rank, agent in enumerate(agents, 1):
+        total_tasks = agent.total_tasks_completed + agent.total_tasks_skipped
+        completion_rate = (agent.total_tasks_completed / total_tasks * 100) if total_tasks > 0 else 0
+        avg_duration = agent.total_duration_seconds / agent.total_tasks_completed if agent.total_tasks_completed > 0 else 0
+
+        # Get period-specific stats if requested
+        period_stats = None
+        if period_days:
+            cutoff_date = datetime.utcnow() - timedelta(days=period_days)
+            period_sessions = db.query(TranscriptionSession).filter(
+                TranscriptionSession.agent_id == agent.agent_id,
+                TranscriptionSession.status == 'completed',
+                TranscriptionSession.completed_at >= cutoff_date
+            ).all()
+
+            period_completed = len(period_sessions)
+            period_duration = sum(s.duration_seconds or 0 for s in period_sessions)
+            period_earnings = (period_duration / 60) * 0.45
+
+            period_stats = {
+                "tasks_completed": period_completed,
+                "duration_seconds": period_duration,
+                "earnings": round(period_earnings, 2)
+            }
+
+        leaderboard.append({
+            "rank": rank,
+            "agent_id": agent.agent_id,
+            "tasks_completed": agent.total_tasks_completed,
+            "completion_rate": round(completion_rate, 1),
+            "total_duration_minutes": round(agent.total_duration_seconds / 60, 2),
+            "total_earnings": round(agent.total_earnings, 2),
+            "average_session_duration": round(avg_duration, 1),
+            "last_active": agent.last_active.isoformat() if agent.last_active else None,
+            "period_stats": period_stats
+        })
+
+    return {
+        "leaderboard": leaderboard,
+        "period_days": period_days,
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/leaderboard/earnings")
+async def get_earnings_leaderboard(
+    limit: int = 10,
+    period_days: Optional[int] = None,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get leaderboard of top earning agents"""
+
+    if period_days:
+        # Period-based earnings leaderboard
+        cutoff_date = datetime.utcnow() - timedelta(days=period_days)
+        sessions = db.query(TranscriptionSession).filter(
+            TranscriptionSession.status == 'completed',
+            TranscriptionSession.completed_at >= cutoff_date
+        ).all()
+
+        # Group by agent and calculate earnings
+        agent_earnings = {}
+        for session in sessions:
+            if session.agent_id not in agent_earnings:
+                agent_earnings[session.agent_id] = {
+                    "tasks_completed": 0,
+                    "duration_seconds": 0,
+                    "earnings": 0.0
+                }
+            agent_earnings[session.agent_id]["tasks_completed"] += 1
+            agent_earnings[session.agent_id]["duration_seconds"] += session.duration_seconds or 0
+            agent_earnings[session.agent_id]["earnings"] += (session.duration_seconds or 0) / 60 * 0.45
+
+        # Sort by earnings and create leaderboard
+        sorted_agents = sorted(agent_earnings.items(), key=lambda x: x[1]["earnings"], reverse=True)[:limit]
+
+        leaderboard = []
+        for rank, (agent_id, stats) in enumerate(sorted_agents, 1):
+            agent = db.query(AgentStats).filter(AgentStats.agent_id == agent_id).first()
+            leaderboard.append({
+                "rank": rank,
+                "agent_id": agent_id,
+                "period_earnings": round(stats["earnings"], 2),
+                "period_tasks": stats["tasks_completed"],
+                "period_duration_minutes": round(stats["duration_seconds"] / 60, 2),
+                "lifetime_earnings": round(agent.total_earnings, 2) if agent else 0,
+                "lifetime_tasks": agent.total_tasks_completed if agent else 0,
+                "last_active": agent.last_active.isoformat() if agent and agent.last_active else None
+            })
+    else:
+        # Lifetime earnings leaderboard
+        agents = db.query(AgentStats).filter(AgentStats.total_earnings > 0).order_by(
+            AgentStats.total_earnings.desc()
+        ).limit(limit).all()
+
+        leaderboard = []
+        for rank, agent in enumerate(agents, 1):
+            leaderboard.append({
+                "rank": rank,
+                "agent_id": agent.agent_id,
+                "lifetime_earnings": round(agent.total_earnings, 2),
+                "lifetime_tasks": agent.total_tasks_completed,
+                "lifetime_duration_minutes": round(agent.total_duration_seconds / 60, 2),
+                "earnings_per_task": round(agent.total_earnings / agent.total_tasks_completed, 2) if agent.total_tasks_completed > 0 else 0,
+                "last_active": agent.last_active.isoformat() if agent.last_active else None
+            })
+
+    return {
+        "leaderboard": leaderboard,
+        "period_days": period_days,
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/leaderboard/productivity")
+async def get_productivity_leaderboard(
+    limit: int = 10,
+    min_tasks: int = 5,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get leaderboard of most productive agents by completion rate and efficiency"""
+
+    agents = db.query(AgentStats).filter(AgentStats.total_tasks_completed >= min_tasks).all()
+
+    productivity_scores = []
+    for agent in agents:
+        total_tasks = agent.total_tasks_completed + agent.total_tasks_skipped
+        completion_rate = (agent.total_tasks_completed / total_tasks * 100) if total_tasks > 0 else 0
+        avg_duration = agent.total_duration_seconds / agent.total_tasks_completed if agent.total_tasks_completed > 0 else 0
+
+        # Calculate productivity score (higher completion rate + faster average time = higher score)
+        # Normalize average duration (assume 300 seconds as baseline)
+        duration_score = max(0, 100 - (avg_duration / 300 * 100)) if avg_duration > 0 else 0
+        productivity_score = (completion_rate * 0.7) + (duration_score * 0.3)
+
+        productivity_scores.append({
+            "agent_id": agent.agent_id,
+            "completion_rate": completion_rate,
+            "average_duration_seconds": avg_duration,
+            "productivity_score": productivity_score,
+            "tasks_completed": agent.total_tasks_completed,
+            "tasks_skipped": agent.total_tasks_skipped,
+            "total_earnings": agent.total_earnings,
+            "last_active": agent.last_active
+        })
+
+    # Sort by productivity score
+    productivity_scores.sort(key=lambda x: x["productivity_score"], reverse=True)
+
+    leaderboard = []
+    for rank, agent_data in enumerate(productivity_scores[:limit], 1):
+        leaderboard.append({
+            "rank": rank,
+            "agent_id": agent_data["agent_id"],
+            "productivity_score": round(agent_data["productivity_score"], 1),
+            "completion_rate": round(agent_data["completion_rate"], 1),
+            "average_duration_seconds": round(agent_data["average_duration_seconds"], 1),
+            "tasks_completed": agent_data["tasks_completed"],
+            "tasks_skipped": agent_data["tasks_skipped"],
+            "total_earnings": round(agent_data["total_earnings"], 2),
+            "last_active": agent_data["last_active"].isoformat() if agent_data["last_active"] else None
+        })
+
+    return {
+        "leaderboard": leaderboard,
+        "min_tasks_filter": min_tasks,
+        "scoring_info": {
+            "completion_rate_weight": "70%",
+            "speed_weight": "30%",
+            "baseline_duration_seconds": 300
+        },
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/stats/system/overview")
+async def get_system_overview(
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get overall system statistics and overview"""
+
+    # Get all agents
+    all_agents = db.query(AgentStats).all()
+    total_agents = len(all_agents)
+
+    # Calculate totals
+    total_completed = sum(a.total_tasks_completed for a in all_agents)
+    total_skipped = sum(a.total_tasks_skipped for a in all_agents)
+    total_duration = sum(a.total_duration_seconds for a in all_agents)
+    total_earnings = sum(a.total_earnings for a in all_agents)
+
+    # Get active agents (last 24 hours)
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    active_agents_24h = db.query(AgentStats).filter(AgentStats.last_active >= yesterday).count()
+
+    # Get current locked tasks
+    try:
+        tasks = project.get_unlabeled_tasks()
+        total_unlabeled = len(tasks)
+
+        # Count locked tasks
+        locked_tasks = 0
+        for task in tasks:
+            if await async_redis_client.exists(f"task:locked:{task['id']}"):
+                locked_tasks += 1
+
+        available_tasks = total_unlabeled - locked_tasks
+    except Exception as e:
+        logger.warning(f"Error getting task counts: {e}")
+        total_unlabeled = 0
+        locked_tasks = 0
+        available_tasks = 0
+
+    # Recent activity (last 7 days)
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    recent_sessions = db.query(TranscriptionSession).filter(
+        TranscriptionSession.assigned_at >= week_ago
+    ).all()
+
+    recent_completed = [s for s in recent_sessions if s.status == 'completed']
+    recent_duration = sum(s.duration_seconds or 0 for s in recent_completed)
+
+    # Daily breakdown for last 7 days
+    daily_activity = {}
+    for i in range(7):
+        date = (datetime.utcnow() - timedelta(days=i)).date()
+        daily_activity[date.isoformat()] = {
+            "completed": 0,
+            "skipped": 0,
+            "duration_seconds": 0,
+            "earnings": 0.0
+        }
+
+    for session in recent_sessions:
+        if session.assigned_at:
+            date_key = session.assigned_at.date().isoformat()
+            if date_key in daily_activity:
+                if session.status == 'completed':
+                    daily_activity[date_key]["completed"] += 1
+                    daily_activity[date_key]["duration_seconds"] += session.duration_seconds or 0
+                    daily_activity[date_key]["earnings"] += (session.duration_seconds or 0) / 60 * 0.45
+                elif session.status == 'skipped':
+                    daily_activity[date_key]["skipped"] += 1
+
+    return {
+        "overview": {
+            "total_agents": total_agents,
+            "active_agents_24h": active_agents_24h,
+            "total_tasks_completed": total_completed,
+            "total_tasks_skipped": total_skipped,
+            "total_duration_hours": round(total_duration / 3600, 2),
+            "total_earnings": round(total_earnings, 2),
+            "average_completion_rate": round((total_completed / (total_completed + total_skipped) * 100), 1) if (total_completed + total_skipped) > 0 else 0
+        },
+        "task_queue": {
+            "total_unlabeled_tasks": total_unlabeled,
+            "currently_assigned": locked_tasks,
+            "available_for_assignment": available_tasks
+        },
+        "recent_activity_7_days": {
+            "total_sessions": len(recent_sessions),
+            "completed_tasks": len(recent_completed),
+            "duration_hours": round(recent_duration / 3600, 2),
+            "earnings": round((recent_duration / 60) * 0.45, 2),
+            "active_agents": len(set(s.agent_id for s in recent_sessions))
+        },
+        "daily_breakdown": daily_activity,
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/stats/daily")
+async def get_daily_stats(
+    days: int = 30,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get daily activity statistics for the specified number of days"""
+
+    start_date = datetime.utcnow() - timedelta(days=days)
+
+    # Get all sessions in the period
+    sessions = db.query(TranscriptionSession).filter(
+        TranscriptionSession.assigned_at >= start_date
+    ).all()
+
+    # Initialize daily stats
+    daily_stats = {}
+    for i in range(days):
+        date = (datetime.utcnow() - timedelta(days=i)).date()
+        daily_stats[date.isoformat()] = {
+            "date": date.isoformat(),
+            "completed": 0,
+            "skipped": 0,
+            "assigned": 0,
+            "duration_seconds": 0,
+            "duration_minutes": 0,
+            "earnings": 0.0,
+            "unique_agents": set()
+        }
+
+    # Populate with actual data
+    for session in sessions:
+        if session.assigned_at:
+            date_key = session.assigned_at.date().isoformat()
+            if date_key in daily_stats:
+                daily_stats[date_key]["assigned"] += 1
+                daily_stats[date_key]["unique_agents"].add(session.agent_id)
+
+                if session.status == 'completed':
+                    daily_stats[date_key]["completed"] += 1
+                    duration = session.duration_seconds or 0
+                    daily_stats[date_key]["duration_seconds"] += duration
+                    daily_stats[date_key]["earnings"] += (duration / 60) * 0.45
+                elif session.status == 'skipped':
+                    daily_stats[date_key]["skipped"] += 1
+
+    # Convert sets to counts and add derived metrics
+    result = []
+    for date_key in sorted(daily_stats.keys(), reverse=True):
+        stats = daily_stats[date_key]
+        stats["duration_minutes"] = round(stats["duration_seconds"] / 60, 2)
+        stats["earnings"] = round(stats["earnings"], 2)
+        stats["unique_agents"] = len(stats["unique_agents"])
+        stats["completion_rate"] = round((stats["completed"] / stats["assigned"] * 100), 1) if stats["assigned"] > 0 else 0
+        result.append(stats)
+
+    return {
+        "daily_stats": result,
+        "period_days": days,
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/stats/live")
+async def get_live_stats(
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get real-time system status and statistics"""
+
+    # Get currently active sessions from Redis
+    active_sessions = []
+    async for key in async_redis_client.scan_iter(match="agent:active:*"):
+        agent_id = key.split(":")[-1]
+        task_data = await async_redis_client.get(key)
+        if task_data:
+            try:
+                task_info = json.loads(task_data)
+                active_sessions.append({
+                    "agent_id": int(agent_id),
+                    "task_id": task_info["task_id"],
+                    "assigned_at": task_info.get("assigned_at")
+                })
+            except:
+                continue
+
+    # Get available tasks
+    try:
+        tasks = project.get_unlabeled_tasks()
+        total_unlabeled = len(tasks)
+
+        available_tasks = 0
+        for task in tasks:
+            if not redis_client.exists(f"task:locked:{task['id']}"):
+                available_tasks += 1
+    except Exception as e:
+        logger.warning(f"Error getting task counts: {e}")
+        total_unlabeled = 0
+        available_tasks = 0
+
+    # Get today's statistics
+    today = datetime.utcnow().date()
+    today_sessions = db.query(TranscriptionSession).filter(
+        TranscriptionSession.assigned_at >= datetime.combine(today, datetime.min.time())
+    ).all()
+
+    today_completed = [s for s in today_sessions if s.status == 'completed']
+    today_skipped = [s for s in today_sessions if s.status == 'skipped']
+    today_duration = sum(s.duration_seconds or 0 for s in today_completed)
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "active_sessions": {
+            "count": len(active_sessions),
+            "sessions": active_sessions
+        },
+        "task_queue": {
+            "total_unlabeled": total_unlabeled,
+            "available_now": available_tasks,
+            "currently_assigned": len(active_sessions)
+        },
+        "today_activity": {
+            "assigned": len(today_sessions),
+            "completed": len(today_completed),
+            "skipped": len(today_skipped),
+            "duration_minutes": round(today_duration / 60, 2),
+            "earnings": round((today_duration / 60) * 0.45, 2),
+            "unique_agents": len(set(s.agent_id for s in today_sessions))
+        }
+    }
+
+@app.get("/api/stats/agents/active")
+async def get_active_agents(
+    hours: int = 24,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Get list of agents active within specified hours"""
+
+    cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+
+    # Get agents active in the period
+    active_agents = db.query(AgentStats).filter(
+        AgentStats.last_active >= cutoff_time
+    ).order_by(AgentStats.last_active.desc()).all()
+
+    # Get current sessions from Redis
+    current_sessions = {}
+    async for key in async_redis_client.scan_iter(match="agent:active:*"):
+        agent_id = int(key.split(":")[-1])
+        task_data = await async_redis_client.get(key)
+        if task_data:
+            try:
+                task_info = json.loads(task_data)
+                current_sessions[agent_id] = task_info["task_id"]
+            except:
+                continue
+
+    # Get recent activity for each agent
+    agent_list = []
+    for agent in active_agents:
+        # Get today's activity
+        today = datetime.utcnow().date()
+        today_sessions = db.query(TranscriptionSession).filter(
+            TranscriptionSession.agent_id == agent.agent_id,
+            TranscriptionSession.assigned_at >= datetime.combine(today, datetime.min.time())
+        ).all()
+
+        today_completed = [s for s in today_sessions if s.status == 'completed']
+        today_duration = sum(s.duration_seconds or 0 for s in today_completed)
+
+        agent_list.append({
+            "agent_id": agent.agent_id,
+            "last_active": agent.last_active.isoformat(),
+            "current_task_id": current_sessions.get(agent.agent_id),
+            "is_currently_working": agent.agent_id in current_sessions,
+            "today_completed": len(today_completed),
+            "today_duration_minutes": round(today_duration / 60, 2),
+            "today_earnings": round((today_duration / 60) * 0.45, 2),
+            "lifetime_completed": agent.total_tasks_completed,
+            "lifetime_earnings": round(agent.total_earnings, 2)
+        })
+
+    return {
+        "active_agents": agent_list,
+        "period_hours": hours,
+        "total_active": len(agent_list),
+        "currently_working": len(current_sessions),
+        "generated_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/api/reports/agents/summary/csv")
+async def download_agent_summary_csv(
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Download agent summary report as CSV file"""
+
+    # Generate CSV content in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow([
+        'Agent_ID', 'Tasks_Completed', 'Tasks_Skipped', 'Total_Duration_Seconds', 'Total_Duration_Minutes',
+        'Total_Earnings', 'Completion_Rate_%', 'Avg_Duration_Seconds', 'Last_Active'
+    ])
+
+    # Get all agents with stats
+    agents = db.query(AgentStats).order_by(AgentStats.total_tasks_completed.desc()).all()
+
+    for agent in agents:
+        total_tasks = agent.total_tasks_completed + agent.total_tasks_skipped
+        completion_rate = (agent.total_tasks_completed / total_tasks * 100) if total_tasks > 0 else 0
+        avg_duration = agent.total_duration_seconds / agent.total_tasks_completed if agent.total_tasks_completed > 0 else 0
+
+        writer.writerow([
+            agent.agent_id,
+            agent.total_tasks_completed,
+            agent.total_tasks_skipped,
+            round(agent.total_duration_seconds, 1),
+            round(agent.total_duration_seconds / 60, 2),
+            round(agent.total_earnings, 2),
+            round(completion_rate, 1),
+            round(avg_duration, 1),
+            agent.last_active.strftime('%Y-%m-%d %H:%M:%S') if agent.last_active else ''
+        ])
+
+    # Create streaming response
+    output.seek(0)
+
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=agent_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"}
+    )
+
+@app.get("/api/reports/sessions/detailed/csv")
+async def download_session_details_csv(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Download detailed session report as CSV file with optional date filtering"""
+
+    # Parse date parameters
+    start_dt = None
+    end_dt = None
+    if start_date:
+        start_dt = datetime.fromisoformat(start_date)
+    if end_date:
+        end_dt = datetime.fromisoformat(end_date)
+
+    # Generate CSV content in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write header
+    writer.writerow([
+        'Session_ID', 'Agent_ID', 'Task_ID', 'Status', 'Duration_Seconds',
+        'Transcription_Length', 'Assigned_At', 'Completed_At', 'Skip_Reason'
+    ])
+
+    # Build query for sessions
+    query = db.query(TranscriptionSession).order_by(TranscriptionSession.assigned_at.desc())
+
+    if start_dt:
+        query = query.filter(TranscriptionSession.assigned_at >= start_dt)
+    if end_dt:
+        query = query.filter(TranscriptionSession.assigned_at <= end_dt)
+
+    sessions = query.all()
+
+    for session in sessions:
+        writer.writerow([
+            session.id,
+            session.agent_id,
+            session.task_id,
+            session.status,
+            session.duration_seconds or '',
+            session.transcription_length or '',
+            session.assigned_at.strftime('%Y-%m-%d %H:%M:%S') if session.assigned_at else '',
+            session.completed_at.strftime('%Y-%m-%d %H:%M:%S') if session.completed_at else '',
+            session.skip_reason or ''
+        ])
+
+    # Create streaming response
+    output.seek(0)
+
+    date_suffix = f"_{start_date}_{end_date}" if start_date or end_date else ""
+    filename = f"session_details{date_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.get("/api/reports/complete/csv")
+async def download_complete_report_csv(
+    authorized: bool = Security(verify_tz_system),
+    db: Session = Depends(get_db)
+):
+    """Download complete agent performance report as CSV file"""
+
+    # Generate CSV content in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write summary header
+    writer.writerow(['AGENT PERFORMANCE SUMMARY'])
+    writer.writerow([])
+
+    # Calculate overall stats
+    agents = db.query(AgentStats).all()
+    total_agents = len(agents)
+    total_completed = sum(a.total_tasks_completed for a in agents)
+    total_skipped = sum(a.total_tasks_skipped for a in agents)
+    total_duration = sum(a.total_duration_seconds for a in agents)
+    total_earnings = sum(a.total_earnings for a in agents)
+
+    writer.writerow(['Total_Agents', total_agents])
+    writer.writerow(['Total_Completed_Tasks', total_completed])
+    writer.writerow(['Total_Skipped_Tasks', total_skipped])
+    writer.writerow(['Total_Duration_Seconds', round(total_duration, 1)])
+    writer.writerow(['Total_Duration_Minutes', round(total_duration / 60, 2)])
+    writer.writerow(['Total_Earnings', f'${total_earnings:.2f}'])
+    writer.writerow([])
+
+    # Agent details header
+    writer.writerow(['INDIVIDUAL AGENT PERFORMANCE'])
+    writer.writerow([
+        'Agent_ID', 'Tasks_Completed', 'Tasks_Skipped', 'Duration_Seconds', 'Duration_Minutes',
+        'Earnings', 'Completion_Rate_%', 'Avg_Duration_Seconds', 'Last_Active'
+    ])
+
+    # Sort agents by completed tasks (descending)
+    agents_sorted = sorted(agents, key=lambda a: a.total_tasks_completed, reverse=True)
+
+    for agent in agents_sorted:
+        total_tasks = agent.total_tasks_completed + agent.total_tasks_skipped
+        completion_rate = (agent.total_tasks_completed / total_tasks * 100) if total_tasks > 0 else 0
+        avg_duration = agent.total_duration_seconds / agent.total_tasks_completed if agent.total_tasks_completed > 0 else 0
+
+        writer.writerow([
+            agent.agent_id,
+            agent.total_tasks_completed,
+            agent.total_tasks_skipped,
+            round(agent.total_duration_seconds, 1),
+            round(agent.total_duration_seconds / 60, 2),
+            f'${agent.total_earnings:.2f}',
+            f'{completion_rate:.1f}%',
+            f'{avg_duration:.1f}s',
+            agent.last_active.strftime('%Y-%m-%d %H:%M:%S') if agent.last_active else 'Never'
+        ])
+
+    # Recent activity (last 7 days)
+    writer.writerow([])
+    writer.writerow(['RECENT ACTIVITY (Last 7 days)'])
+
+    week_ago = datetime.utcnow() - timedelta(days=7)
+    recent_sessions = db.query(TranscriptionSession).filter(
+        TranscriptionSession.assigned_at >= week_ago
+    ).all()
+
+    recent_completed = [s for s in recent_sessions if s.status == 'completed']
+    recent_duration = sum(s.duration_seconds or 0 for s in recent_completed)
+    active_agents = len(set(s.agent_id for s in recent_sessions))
+
+    writer.writerow(['Recent_Sessions', len(recent_sessions)])
+    writer.writerow(['Active_Agents', active_agents])
+    writer.writerow(['Completed_Tasks', len(recent_completed)])
+    writer.writerow(['Duration_Minutes', round(recent_duration / 60, 2)])
+    writer.writerow(['Earnings', f'${(recent_duration/60) * 0.45:.2f}'])
+
+    # Create streaming response
+    output.seek(0)
+
+    return StreamingResponse(
+        io.BytesIO(output.getvalue().encode('utf-8')),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=complete_agent_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"}
+    )
+
+@app.get("/dashboard")
+async def serve_dashboard():
+    """Serve the dashboard HTML page with API key injection"""
+    import os
+    dashboard_path = os.path.join(os.path.dirname(__file__), "web", "dashboard.html")
+
+    if not os.path.exists(dashboard_path):
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    # Read the HTML template and inject the API key
+    with open(dashboard_path, 'r', encoding='utf-8') as f:
+        html_content = f.read()
+
+    # Replace placeholder with actual API key from environment
+    html_content = html_content.replace(
+        "const API_KEY = 'tqvdCM+/Bkm1rRZOGuMHByXYEtNqXCVy1kOGrh3umVQ=';",
+        f"const API_KEY = '{TZ_SYSTEM_API_KEY}';"
+    )
+
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html_content)
+
+if __name__ == "__main__":
+    import uvicorn
+    import signal
+    import sys
+
+    def signal_handler(signum, frame):
+        """Handle shutdown signals gracefully"""
+        logger.info(f"Received signal {signum}, shutting down gracefully...")
+        sys.exit(0)
+
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    logger.info("Starting Label Studio ASR Middleware service...")
+
+    # Validate configuration on startup
+    try:
+        logger.info("Validating configuration...")
+        if not LS_API_KEY:
+            raise ValueError("LABEL_STUDIO_API_KEY not configured")
+        if not TZ_SYSTEM_API_KEY:
+            raise ValueError("TZ_SYSTEM_API_KEY not configured")
+
+        # Test connections
+        logger.info("Testing Label Studio connection...")
+        ls_client.check_connection()
+        logger.info("✅ Label Studio connection successful")
+
+        logger.info("Testing Redis connection...")
+        redis_client.ping()
+        logger.info("✅ Redis connection successful")
+
+        logger.info("Testing PostgreSQL connection...")
+        test_connection()
+        create_tables()
+        logger.info("✅ PostgreSQL connection and tables ready")
+
+        logger.info(f"✅ Configuration validated for project {PROJECT_ID}")
+
+    except Exception as e:
+        logger.error(f"❌ Configuration validation failed: {e}")
+        sys.exit(1)
+
+    logger.info(f"🚀 Server will be available at http://0.0.0.0:8010")
+    logger.info(f"📄 Frontend template available in ./web/ directory")
+
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=8010,
+            log_level="info",
+            access_log=True
+        )
+    except Exception as e:
+        logger.error(f"Failed to start server: {e}")
+        sys.exit(1)
